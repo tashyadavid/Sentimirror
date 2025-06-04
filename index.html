@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SentiMirror</title>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="https://use.typekit.net/mme6bmy.css" />
+
+    <!-- Libraries -->
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"
+      defer
+    ></script>
+
+    <script src="https://unpkg.com/ml5@0.6.0/dist/ml5.min.js" defer></script>
+
+    <!-- html2canvas for capturing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- Mood Sketch -->
+    <script src="moodSketch.js" defer></script>
+  </head>
+
+  <body>
+    <div class="textContent">
+      <p id="status"></p>
+      <p id="tip" class="tip-text hidden">Please respond in a full sentence.</p>
+    </div>
+    <div id="mirror-container">
+      <div id="fade-overlay"></div>
+      <div id="blur-overlay"></div>
+    </div>
+    <div id="mood-sketch" class="hidden"></div>
+
+    <div class="reflect">
+      <button onclick="pickQuestion()">Your journey begins here</button>
+    </div>
+    <div class="souvenir hidden">
+      <button onclick="saveReflection()">Save My Reflection</button>
+    </div>
+    <script>
+      let cam;
+      let mirrorStarted = false;
+
+      function setup() {
+        const canvas = createCanvas(windowWidth, windowHeight);
+        canvas.parent("mirror-container");
+
+        cam = createCapture({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        cam.elt.setAttribute("playsinline", "");
+        cam.elt.setAttribute("autoplay", "");
+        cam.elt.muted = true;
+        cam.size(width, height);
+        cam.hide();
+      }
+
+      function draw() {
+        background(0);
+        translate(width, 0);
+        scale(-1, 1);
+        image(cam, 0, 0, width, height);
+      }
+
+      function windowResized() {
+        resizeCanvas(windowWidth, windowHeight);
+        cam.size(windowWidth, windowHeight);
+      }
+
+      const statusText = document.getElementById("status");
+      const blurOverlay = document.getElementById("blur-overlay");
+      const fadeOverlay = document.getElementById("fade-overlay");
+      const reflectButton = document.querySelector(".reflect button");
+
+      let sentiment = null;
+      let isRecognitionActive = false;
+
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      const recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.continuous = true;
+
+      const listOfQuestions = [
+        "What kind of song is playing in the background of your thoughts?",
+        "If your feelings were weather, what forecast would you give?",
+        "What memory has visited you most often lately?",
+        "Is there a corner of your mind you’ve been avoiding?",
+        "Are you drifting, rooted, or reaching?",
+        "Is there a word you’ve been afraid to say out loud lately?",
+        "Is your breath heavy or light today?",
+        "What does comfort smell like to you?",
+        "If you could press pause on one feeling, what would it be?",
+        "If your heart wrote a letter today, what would the first line say?",
+      ];
+
+      // Function to start the reflection journey
+      function unlockExperience() {
+        mirrorStarted = true;
+
+        blurOverlay.classList.add("hidden");
+        fadeOverlay.classList.add("fade-out");
+        blurOverlay.style.display = "none";
+        fadeOverlay.style.display = "none";
+
+        document.querySelector(".reflect").classList.add("show");
+        reflectButton.textContent = "Your journey begins here";
+        statusText.textContent = "";
+      }
+
+      // Function to pick a random question
+      function pickQuestion() {
+        const index = Math.floor(Math.random() * listOfQuestions.length);
+        const question = listOfQuestions[index];
+        askQuestion(question);
+
+        reflectButton.classList.add("fade-out");
+
+        setTimeout(() => {
+          reflectButton.style.display = "none";
+        }, 500);
+      }
+
+      // Function to speak question
+      function askQuestion(question) {
+        statusText.textContent = "";
+        setTimeout(() => {
+          statusText.textContent = question;
+        }, 400);
+
+        const tip = document.getElementById("tip");
+        tip.classList.remove("hidden");
+        setTimeout(() => {
+          tip.classList.add("visible");
+        }, 300);
+
+        const utterance = new SpeechSynthesisUtterance(question);
+        utterance.onend = () => {
+          startInitialListening();
+        };
+        speechSynthesis.speak(utterance);
+      }
+
+      // ml5 sentiment analysis
+      async function preloadSentiment() {
+        sentiment = await ml5.sentiment("MovieReviews");
+        if (sentiment && sentiment.predict) {
+          console.log("Sentiment model loaded and ready.");
+        } else {
+          console.error(" Sentiment model failed to load.");
+        }
+      }
+
+      // Function for capturing user input
+      function startInitialListening() {
+        if (!isRecognitionActive) {
+          statusText.textContent = "Listening... Say 'ready'";
+          recognition.start();
+        }
+      }
+
+      recognition.onstart = () => {
+        isRecognitionActive = true;
+
+        if (!mirrorStarted) {
+          statusText.textContent = "Say 'ready' to begin";
+        }
+      };
+
+      recognition.onerror = (event) => {
+        statusText.textContent = "Error: " + event.error;
+      };
+
+      // Transcribe answer and check for initialisation or sentiment analysis
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript.toLowerCase();
+        console.log("Transcript:", transcript);
+        statusText.textContent = `You said: "${transcript}"`;
+        document.getElementById("tip").classList.remove("visible");
+
+        if (transcript.includes("yes") || transcript.includes("ready")) {
+          recognition.stop();
+          unlockExperience();
+        } else {
+          statusText.textContent = `Analyzing: "${transcript}"...`;
+          recognition.stop();
+          analyseSentiment(transcript);
+        }
+      };
+
+      recognition.onend = () => {
+        isRecognitionActive = false;
+      };
+
+      // Function to analyse sentiment using ml5
+      function analyseSentiment(text) {
+        console.log(" analyseSentiment called with:", text);
+
+        if (!sentiment || !sentiment.predict) {
+          console.error(" Sentiment model not ready or invalid.");
+          return;
+        }
+
+        const result = sentiment.predict(text);
+        console.log("Sentiment result:", result);
+
+        if (!result || result.score === undefined) {
+          console.error(" No sentiment result returned.");
+          statusText.textContent = "Sorry, couldn't understand the emotion.";
+          return;
+        }
+
+        const score = result.score;
+        statusText.textContent = `Sentiment score: ${score.toFixed(2)}`;
+        showMoodSketch(score);
+      }
+
+      // Function to trigger visuals based on the sentiment score
+      function showMoodSketch(score) {
+        console.log(" Triggering mood sketch with score:", score);
+
+        let color;
+        if (score < 0.3) color = [150, 150, 150]; // grey
+        else if (score < 0.7) color = [100, 140, 230]; //  blue
+        else color = [255, 225, 40]; //yellow
+
+        const sketchContainer = document.getElementById("mood-sketch");
+        sketchContainer.classList.remove("hidden");
+        new p5(moodSketch(color));
+
+        // Allow user to save their "reflection journey"
+        const saveBtnContainer = document.querySelector(".souvenir");
+        setTimeout(() => {
+          saveBtnContainer.classList.remove("hidden");
+        }, 30000);
+      }
+
+      window.addEventListener("load", async () => {
+        await preloadSentiment();
+        startInitialListening();
+      });
+
+      // Function to save a screenshot of the user's "reflection journey"
+      function saveReflection() {
+        const container = document.getElementById("mirror-container");
+
+        html2canvas(container, {
+          useCORS: true,
+          backgroundColor: null,
+        }).then((canvas) => {
+          canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement("a");
+            link.download = `reflection_${Date.now()}.png`;
+            link.href = url;
+            link.click();
+
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+          }, "image/png");
+        });
+      }
+    </script>
+  </body>
+</html>
